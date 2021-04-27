@@ -1,0 +1,643 @@
+---
+title: "Untitled"
+author: "Oisín McNulty"
+date: "20/04/2021"
+output: html_document
+---
+
+
+
+```{r setup, include=FALSE}
+## THIS WILL CREATE A VERY LARGE OBJECT (4mb) WHICH WILL FREEZE SMALL MULTICORE COMPUTERS.  To replicate reduce t and m to 10's
+t <- 500
+m <- 100
+h <- array(rnorm(m*t),c(m,t)) # time series in rows
+e <- h %*% t(h)/t # form the correlation matrix
+lambda_e <- eigen(e,symmetric = T, only.values = T)
+ee <- lambda_e$values # Eigenvalyes if the correlation matrix
+
+load("C:/Users/Oisin/Dropbox/My PC (LAPTOP-FFR71B0C)/Downloads/daily_factors.rda")
+load("C:/Users/Oisin/Dropbox/My PC (LAPTOP-FFR71B0C)/Downloads/ftse350.rda")
+load("C:/Users/Oisin/Dropbox/My PC (LAPTOP-FFR71B0C)/Downloads/ftse25_rtns_mthly.rda")
+
+library(magrittr)
+
+library(fpc)
+library(factoextra)
+library(fungible)
+library(koRpus)
+library(tools)
+
+library(entropy)
+library(tidyverse)
+library(ati)
+library(ggdendro)
+
+```
+
+
+
+# Marcenko-Pastur density
+```{r}
+#Function to compute Marcenko-Pastur density in
+library(matlab)
+mp_pdf<-function(var,t,m,pts) {
+  q=t/m
+  eMin<-var*(1-(1./q)^.5)^2 
+  eMax<-var*(1+(1./q)^.5)^2 
+  eVal<-linspace(eMin,eMax,pts)
+  pdf<-q/(2*pi*var*eVal)*((eMax-eVal)*(eVal-eMin))^.5
+  pdf<-array(pdf) 
+  names(pdf)<-eVal # creates a named array
+  return(pdf)
+}
+
+```
+
+
+# Random Matrix Technique 
+```{r}
+custom.portfolio.moments <- function(R, portfolio) {
+  momentargs<-list()
+  momentargs$mu<-matrix(as.vector(apply(R,2, "mean")), ncol = 1)
+  momentargs$sigma<-estRMT(R, parallel=FALSE)$cov
+   momentargs$m3 <- matrix(0, nrow=ncol(R), ncol=ncol(R)^2)
+  momentargs$m4 <- matrix(0, nrow=ncol(R), ncol=ncol(R)^3)
+  return(momentargs)
+}
+
+```
+
+```{r}
+setwd("C:/Users/Oisin/OneDrive - Queen's University Belfast/Quant - Msc 2020/Semester 2/FIN7030 - Algo trading and investing")
+dow30data <- read.csv("Algorithmic Trading and Investment.csv")
+```
+
+
+```{r}
+library(PortfolioAnalytics)
+pspec.lo <- portfolio.spec(assets = colnames(dow30data))
+# Specification 1 and 2
+pspec.lo <- add.constraint(pspec.lo, type="full_investment")
+pspec.lo <- add.constraint(pspec.lo, type="long_only")
+# Specification 3
+pspec.lo <- add.objective(portfolio=pspec.lo, type="return", name="mean")
+pspec.lo <- add.objective(portfolio=pspec.lo, type="risk", name="var")
+
+
+```
+```{r}
+
+```
+
+
+# Distance Metrics
+
+
+```{r}
+#Information Entropy - given probabilities
+p <- c(0.3,0.7)
+-sum(p*log(p))
+
+#Information Entropy - given probabilities
+p <- c(0.01,0.99)
+-sum(p*log(p))
+
+#Information Entropy - given probabilities
+p<-c(0.7,0.15,0.15)
+-sum(p*log(p))
+
+
+```
+
+# NMI Statistics
+```{R}
+numBins<-function(nObs,corr=NULL){
+  #Optimal
+  if (is.null(corr)) {
+    z=(8+324*nObs+12*(36*nObs+729*nObs^2)^0.5)^(1/3)
+    b=round(z/6+2/(3*z)+1/3)
+  }
+  else {
+    #bivariate case
+    b=round(2^(-0.5)*(1+(1+24*nObs/(1-corr^2))^0.5)^0.5)
+  }
+  return(b)
+}
+```
+
+```{r, echo=TRUE, include=FALSE}
+#install.packages("RTransferEntropy")
+#install.packages("future")
+library(RTransferEntropy)
+library(future)
+# enable parallel processing
+plan(multisession) # initialised a multicore enviroment
+data("stocks") # loads data
+
+TE<-stocks %>%
+  group_by(ticker) %>%
+  group_split(.keep = TRUE) %>%
+  map(~transfer_entropy(x = .x$ret,y=.x$sp500,shuffles = 500,type = "bins",bins=12))
+names(TE)<-unique(stocks$ticker)
+```
+
+```{r, fig.show = "hold", out.width="50%"}
+ent_table <- TE$coef
+for (i in 1:length(TE)) {
+    ent_table$names[i] <- names(TE)[i]
+    ent_table$te[i] <- TE[[i]][["coef"]][1,1]
+    ent_table$ete[i] <- TE[[i]][["coef"]][1,2]
+    ent_table$se[i] <- TE[[i]][["coef"]][1,3]
+    ent_table$pvalue[i] <- TE[[i]][["coef"]][1,4]
+}
+ent_table = as.data.frame(ent_table)
+ent_table %>%
+  ggplot(aes(x=names,y=ete)) +
+  geom_point() +
+  geom_errorbar(aes(ymin=ete-2*se,ymax=ete+2*se),width=0.3) +
+  #facet_wrap(~Direction) +
+  labs(y="Effective Transfer Entropy",x="Company Names",
+       title = "Effective Transfer Entropy TO the Market + 95% intervals") +
+  geom_hline(yintercept = 0,colour="red") +
+  ylim(0,0.035) + 
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+
+ent_table_2 <- TE$coef
+for (i in 1:length(TE)) {
+    ent_table_2$names[i] <- names(TE)[i]
+    ent_table_2$te[i] <- TE[[i]][["coef"]][2,1]
+    ent_table_2$ete[i] <- TE[[i]][["coef"]][2,2]
+    ent_table_2$se[i] <- TE[[i]][["coef"]][2,3]
+    ent_table_2$pvalue[i] <- TE[[i]][["coef"]][2,4]
+}
+ent_table_2 = as.data.frame(ent_table_2)
+
+ent_table_2 %>%
+  ggplot(aes(x=names,y=ete)) +
+  geom_point() +
+  geom_errorbar(aes(ymin=ete-2*se,ymax=ete+2*se),width=0.3) +
+  #facet_wrap(~Direction) +
+  labs(y="Effective Transfer Entropy",x="Company Names",
+       title = "Effective Transfer Entropy FROM The Market + 95% intervals") +
+  geom_hline(yintercept = 0,colour="red") +
+  ylim(0,0.035) + 
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+```
+
+
+
+
+
+# K - means experiment
+
+```{r}
+fungible::monte(seed = 123,nvar = 2,nclus = 3,clus.size = c(1000,1000,1000),eta2 = c(0.70, 0.30))->dat
+dat1<-as_tibble(dat$data)
+kmeansObj <- kmeans(dat1, centers = 3)
+
+factoextra::fviz_cluster(kmeansObj,data = dat1)
+```
+
+SIMULATE 3 Clusters
+```{R}
+set.seed(12345)
+f1 <- rnorm(45, rep(1:3, each = 15), 0.2)
+f2 <- rnorm(45, rep(c(1, 2, 1), each = 15), 0.2)
+tibble(x=f1,y=f2,obs=1:45)->dat
+dat %>% ggplot(aes(x=x,y=y)) + geom_point(colour='pink') + geom_label(aes(label=obs))
+
+```
+
+H CLUSTERING 
+
+```{r}
+hClustering <- dat %>% dist %>% hclust(method = 'single')
+
+ggdendrogram(hClustering)
+```
+
+## Experimental Clusters
+
+```{r}
+f2c3<-monte(seed = 123,nvar = 2,nclus = 3,clus.size = c(1000,1000,1000),eta2 = c(0.9,0.9))[['data']] %>% as.tibble()
+f2c3 %>% ggplot(aes(x=V2,y=V3)) + geom_point(colour='pink')
+
+
+```
+Elbow Method
+```{r}
+### Elbow method (look at the knee)
+# Elbow method for kmeans
+f3c3<-monte(seed = 123,nvar = 3,nclus = 3,clus.size = c(100,100,100),eta2 = c(0.8,0.8,0.8))[['data']] %>% as.tibble()
+fviz_nbclust(f3c3, kmeans, method = "wss")
+```
+
+Gap Statistic
+```{r}
+fviz_nbclust(f3c3, kmeans, method = "gap_stat")
+```
+
+
+
+
+
+
+Silhouette 
+```{r}
+fviz_nbclust(f3c3, kmeans, method = "silhouette")
+```
+
+
+```{r,echo=TRUE, fig.show = "hold", out.width="50%"}
+factors<-read.csv("dailyfactors.csv")
+
+factors_scaled<-scale(factors[,-1]) %>% as.tibble()
+factors_scaled %>%
+  ggplot(aes(x=hml,y=umd)) + geom_point() + labs(title = "Cluster Plot",y='Momentum=Up minus Down', x="Value=High minus Low")
+
+factors_scaled %>% select(hml,umd)->f2
+kmeans(f2,centers=5)->kmobj
+factoextra::fviz_cluster(kmobj,data = f2) + labs(title = "Cluster Plot - (KMeans Clusters)", y='Momentum=Up minus Down', x="Value=High minus Low")
+```
+
+
+
+
+# Algorithms and Inference
+
+```{r}
+set.seed(123)
+S1=100; t=100; Price=vector(length = t)
+noise=runif(t,min = -5,max = 5)
+for (tt in 1:t) {
+  if (tt==1) {
+    Price[tt]=S1
+  }
+  else{
+  Price[tt] = Price[tt-1] + noise[tt]
+  }
+}
+sum(Price)/length(Price)
+
+```
+
+
+```{r}
+standard_error<- function(x){
+  dx=(x-mean(x))^2
+  denom=length(x)*(length(x)-1)
+  sumsq=sum(dx)/denom
+  sqrt(sumsq)
+}
+standard_error(Price)
+
+```
+
+
+
+
+
+```{r}
+factor<-Price + runif(t,1,8)^2
+tibble(Price,factor)->df 
+df %>% ggplot(aes(y=Price,x=factor)) + geom_point() +
+  geom_smooth(method = "lm") #<< adds least squares line with standard errors
+
+```
+
+
+
+
+```{r}
+df %>% ggplot(aes(y=Price,x=factor)) + geom_point() +
+  geom_smooth(method = "loess") #
+
+```
+
+
+
+
+
+
+
+```{r}
+set.seed(1235)
+res<-tibble(testno=1:20, pvalue=1)
+for (i in 1:20) {
+  Up=rnorm(1000)
+  NoUp=rnorm(1000)
+  res[i,2]<-t.test(Up,NoUp)['p.value']
+}
+
+```
+
+
+
+
+```{r}
+library(tidyquant)
+library(parameters)
+uk_factors <- daily_factors
+uk_factors %>%
+  tq_transmute(select =hml,mutate_fun = monthlyReturn, col_rename = "hml_monthly") -> value_monthly
+mean(value_monthly$hml_monthly)
+
+standard_error(value_monthly$hml_monthly)
+
+```
+
+# 7. Explainable AI
+
+
+```{r}
+library(knitr)
+
+popn<-as.numeric(ati::daily_factors$hml)
+alpha <- 0.05
+N <- 100 # sample size
+m <- 1000 # number of strategies
+p0<-0.99 # 99% of strategies are not profitable
+m0 <- m*p0 # number of truly unprofitable strategies
+m1 <- m-m0 # number of truly profitable strategies
+nullHypothesis <- c( rep(TRUE,m0), rep(FALSE,m1))
+delta <- 10 # average profitability of the strategies is 10%
+set.seed(12)
+calls <- sapply(1:m, function(i){
+  control <- sample(popn,N)
+  treatment <- sample(popn,N)
+  if(!nullHypothesis[i]) treatment <- treatment + delta
+  ifelse( t.test(treatment,control)$p.value < alpha, 
+          "Called Significant",
+          "Not Called Significant")
+})
+
+null_hypothesis <- factor(nullHypothesis, levels=c("TRUE","FALSE"))
+table(null_hypothesis,calls) %>% kable(col.names = ) %>% kableExtra::kable_material()
+
+```
+
+## Substitiution Effect
+
+```{r}
+library(reticulate)
+use_condaenv("r-reticulate")
+```
+
+
+
+
+
+```{python}
+def getTestData(n_features=100,n_informative=25,n_redundant=25,n_samples=10000,random_state=0,sigmaStd=.0):
+    from sklearn.datasets import make_classification
+    np.random.seed(random_state)
+    X,y=make_classification(n_samples=n_samples,
+      n_features=n_features-n_redundant,
+      n_informative=n_informative,n_redundant=0,shuffle=False,
+      random_state=random_state)
+    cols=['Informative_'+ str(i) for i in range(n_informative)]
+    cols+=['Noise_'+ str(i) for i in range(n_features-n_informative-n_redundant)]
+    X,y=pd.DataFrame(X,columns=cols),pd.Series(y)
+    i=np.random.choice(range(n_informative),size=n_redundant)
+    for k,j in enumerate(i):
+        X["Redundant_"+str(k)]=X['Informative_'+str(j)]+np.random.normal(size=X.shape[0])*sigmaStd
+    return X,y
+    
+
+
+```
+
+```{python}
+#import numpy as np
+#import pandas as pd
+#import statsmodels.discrete.discrete_model as sm
+#X,y=getTestData(40,5,30,10000,sigmaStd=.1)
+#ols=sm.Logit(y,X).fit()
+
+#pvalues=ols.pvalues
+
+```
+
+
+
+
+```{r}
+
+#install.packages("correlationfunnel")
+library(correlationfunnel)
+funnel_returns_ggplot <- dat %>%
+  select(-Date,-Sector) %>%
+  drop_na() %>%
+    correlate(Return) %>%
+    plot_correlation_funnel()
+
+```
+
+
+
+
+```{r}
+#install.packages("h2o")
+library(h2o)
+h2o.shutdown()
+h2o.no_progress()
+h2o.init()
+dat.h2o <- as.h2o(df_w)
+set.seed(12345)
+splitss <- h2o.splitFrame(dat.h2o, ratios = c(.7, .15), destination_frames = c("train","valid","test"))
+names(splitss) <- c("train","valid","test")
+```
+
+
+
+
+```{r}
+getExpectedMaxSR<-function(nTrails,meanSR,stdSR){
+  # Expected Max SR controlling for SBuMT
+  emc=0.577215664901532860606512090082402431042159336
+  sr0=(1-emc)*qnorm(p=1-1./nTrails)+emc*qnorm(1-(nTrails*exp(1))^(-1))
+  sr0=meanSR+stdSR*sr0
+  return(sr0)
+}
+```
+
+
+
+
+```{r}
+getDistMaxSR<-function(nSims,nTrails,meanSR,stdSR){
+  out=tibble("Max{SR}"=NA,"nTrails"=NA)
+  for (nTrails_ in nTrails) {
+    #1) Simulated Sharpe Ratios
+    set.seed(nTrails_)
+    sr<-array(rnorm(nSims*nTrails_),dim = c(nSims,nTrails_))
+    sr<-apply(sr,1,scale) # demean and scale
+    sr= meanSR+sr*stdSR
+    #2) Store output
+    out<-out %>% bind_rows(
+      tibble("Max{SR}"=apply(sr,2,max),"nTrails"=nTrails_))
+  }
+  return(out)
+}
+
+```
+
+
+
+
+```{r}
+#install.packages("pracma")
+library(pracma)
+# Create a sequential on the log-linear scale
+nTrails<-as.integer(logspace(1,4,100)) %>% unique()
+plot(nTrails)
+sr0=array(dim = length(nTrails))
+for (i in seq_along(nTrails)) {
+  sr0[i]<-getExpectedMaxSR(nTrails[i],meanSR = 0, stdSR = 1)
+}
+sr1=getDistMaxSR(nSims = 1000,nTrails = nTrails,meanSR = 0,stdSR = 1)
+
+```
+
+
+
+
+```{r}
+library(pracma)
+# Create a sequential on the log-linear scale
+nTrails<-as.integer(logspace(1,4,100)) %>% unique()
+plot(nTrails)
+sr0=array(dim = length(nTrails))
+for (i in seq_along(nTrails)) {
+  sr0[i]<-getExpectedMaxSR(nTrails[i],meanSR = 0, stdSR = 1)
+}
+sr1=getDistMaxSR(nSims = 1000,nTrails = nTrails,meanSR = 0,stdSR = 1)
+
+```
+
+
+
+## Most important plot in quant finance
+```{r}
+sr1 %>% ggplot(aes(x=nTrails,y=`Max{SR}`)) + 
+  geom_point(alpha=0.01,colour="blue") +
+  geom_line(data = tibble(nTrails,`E{maxSR}`=sr0),aes(y=`E{maxSR}`, x=nTrails),colour='red') +
+  labs(y="E{maxSR},MaxSR",x="Number of Trails",title="max(SR) for uninformed strategies for std(SR)=1")
+```
+
+### Inference from plot
+- The experiment compares the empirical (Monte Carlo) estimate of Maximum Sharpe ratio under the null of a false strategy to that implied by the FS theorem
+- The plot shows the output of the experiment for 1 to 10,000 trails.
+- The code sets $V[\hat{SR_k}]=1$ and simulates the maximum Sharpe ratio 500 times, to derive a distribution of maximum Sharpe ratios for any k (number of trails).
+- the y axis shows the distribution of the $max_k(\hat{SR_k})$ and the Expect  
+- this results is profound, after only 100 independent backtests the expected maximum Sharpe ratio is 3.2, even when the true Sharpe ratio is zero.
+- The reason is **Backtest overfitting**: when selection bias (picking the best results) takes place under multiple testing (running many alternative configurations) that backtests are likely to be false discoveries.
+
+
+
+```{r}
+
+```
+
+
+
+
+```{r}
+
+
+```
+
+
+
+
+```{r}
+
+
+```
+
+
+
+
+```{r}
+
+
+```
+
+
+
+
+```{r}
+
+
+```
+
+
+
+
+```{r}
+
+
+```
+
+
+
+
+```{r}
+
+
+```
+
+
+
+
+```{r}
+
+
+```
+
+
+
+
+```{r}
+
+
+```
+
+
+
+
+```{r}
+
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
